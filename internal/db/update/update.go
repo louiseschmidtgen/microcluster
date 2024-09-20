@@ -155,7 +155,7 @@ CREATE TABLE schemas_new (
 );
 
 INSERT INTO schemas_new SELECT id,version,0,updated_at FROM schemas WHERE version = 1;
-INSERT INTO schemas_new SELECT id,(version-1),1,updated_at FROM schemas WHERE version > 1;
+INSERT INTO schemas_new SELECT id,(version-2),1,updated_at FROM schemas WHERE version > 1;
 
 DROP TABLE schemas;
 ALTER TABLE schemas_new RENAME TO schemas;
