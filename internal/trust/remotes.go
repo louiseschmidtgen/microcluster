@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/canonical/lxd/shared"
 	"github.com/canonical/lxd/shared/api"
@@ -235,6 +237,38 @@ func (r *Remotes) Cluster(isNotification bool, serverCert *shared.CertInfo, publ
 	}
 
 	return cluster, nil
+}
+
+// ReachableCluster returns a set of clients for every reachable remote, which can be concurrently queried.
+func (r *Remotes) ReachableCluster(isNotification bool, serverCert *shared.CertInfo, publicKey *x509.Certificate) (client.Cluster, error) {
+	cluster := make(client.Cluster, 0, r.Count()-1)
+	for _, addr := range r.Addresses() {
+		if !isReachable(addr) {
+			continue
+		}
+
+		url := api.NewURL().Scheme("https").Host(addr.String())
+		c, err := internalClient.New(*url, serverCert, publicKey, isNotification)
+		if err != nil {
+			return nil, err
+		}
+
+		cluster = append(cluster, client.Client{Client: *c})
+	}
+
+	return cluster, nil
+}
+
+// isReachable performs a quick TCP connectivity check to determine if a node is reachable.
+func isReachable(addr types.AddrPort) bool {
+	// Use a short timeout for the connectivity check
+	conn, err := net.DialTimeout("tcp", addr.String(), 2*time.Second)
+	if err != nil {
+		return false
+	}
+
+	conn.Close()
+	return true
 }
 
 // RemoteByAddress returns a Remote matching the given host address (or nil if none are found).
