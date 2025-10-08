@@ -52,7 +52,7 @@ func trustPost(s state.State, r *http.Request) response.Response {
 	defer cancel()
 
 	if !client.IsNotification(r) {
-		cluster, err := s.Cluster(true)
+		cluster, err := s.ReachableCluster(true)
 		if err != nil {
 			return response.SmartError(err)
 		}
