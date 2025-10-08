@@ -630,7 +630,7 @@ func (d *Daemon) StartAPI(ctx context.Context, bootstrap bool, initConfig map[st
 		return err
 	}
 
-	cluster, err := d.trustStore.Remotes().Cluster(false, d.ServerCert(), publicKey)
+	cluster, err := d.trustStore.Remotes().ReachableCluster(false, d.ServerCert(), publicKey)
 	if err != nil {
 		return err
 	}
@@ -654,17 +654,17 @@ func (d *Daemon) StartAPI(ctx context.Context, bootstrap bool, initConfig map[st
 				return nil
 			}
 
-			// At this point the joiner is only trusted on the node that was leader at the time,
-			// so find it and have it instruct all dqlite members to trust this system now that it is functional.
-			if !clusterConfirmation {
-				err := internalClient.AddTrustStoreEntry(ctx, &c.Client, localMemberInfo)
-				if err != nil {
-					lastErr = err
-				} else {
-					clusterConfirmation = true
-				}
+			// Propagate trust to all reachable cluster members for fault tolerance.
+			err := internalClient.AddTrustStoreEntry(ctx, &c.Client, localMemberInfo)
+			if err != nil {
+				lastErr = err
+				// Continue trying other nodes even if this one fails
+				return nil
 			}
 
+			clusterConfirmation = true
+
+			// Continue to propagate trust to all nodes, don't stop after first success
 			return nil
 		})
 		if err != nil {
