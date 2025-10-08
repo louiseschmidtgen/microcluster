@@ -48,6 +48,9 @@ type State interface {
 	// Cluster returns a client to every cluster member according to dqlite.
 	Cluster(isNotification bool) (client.Cluster, error)
 
+	// ReachableCluster returns a client to every reachable cluster member according to dqlite.
+	ReachableCluster(isNotification bool) (client.Cluster, error)
+
 	// Leader returns a client to the dqlite cluster leader.
 	Leader() (*client.Client, error)
 
@@ -165,35 +168,53 @@ func (s *InternalState) HasExtension(ext string) bool {
 // this one.
 // All requests made by the client will have the UserAgentNotifier header set
 // if isNotification is true.
+// Uses the trust store instead of database for better fault tolerance -
+// trust store is updated on heartbeats and shouldn't contain crashed nodes.
 func (s *InternalState) Cluster(isNotification bool) (client.Cluster, error) {
-	c, err := s.Leader()
+	publicKey, err := s.ClusterCert().PublicKeyX509()
 	if err != nil {
 		return nil, err
 	}
 
-	clusterMembers, err := c.GetClusterMembers(s.Context)
+	// Use trust store instead of database - it's updated on heartbeats
+	// and is more likely to reflect current reachable cluster state
+	remotes := s.Remotes()
+	allClients, err := remotes.Cluster(isNotification, s.ServerCert(), publicKey)
 	if err != nil {
 		return nil, err
 	}
 
-	clients := make(client.Cluster, 0, len(clusterMembers)-1)
-	for _, clusterMember := range clusterMembers {
-		if s.Address().URL.Host == clusterMember.Address.String() {
-			continue
+	// Filter out ourselves from the client list
+	clients := make(client.Cluster, 0, len(allClients)-1)
+	for _, client := range allClients {
+		if s.Address().URL.Host != client.URL().URL.Host {
+			clients = append(clients, client)
 		}
+	}
 
-		publicKey, err := s.ClusterCert().PublicKeyX509()
-		if err != nil {
-			return nil, err
+	return clients, nil
+}
+
+func (s *InternalState) ReachableCluster(isNotification bool) (client.Cluster, error) {
+	publicKey, err := s.ClusterCert().PublicKeyX509()
+	if err != nil {
+		return nil, err
+	}
+
+	// Use trust store instead of database - it's updated on heartbeats
+	// and is more likely to reflect current reachable cluster state
+	remotes := s.Remotes()
+	allReachableClients, err := remotes.ReachableCluster(isNotification, s.ServerCert(), publicKey)
+	if err != nil {
+		return nil, err
+	}
+
+	// Filter out ourselves from the client list
+	clients := make(client.Cluster, 0, len(allReachableClients)-1)
+	for _, client := range allReachableClients {
+		if s.Address().URL.Host != client.URL().URL.Host {
+			clients = append(clients, client)
 		}
-
-		url := api.NewURL().Scheme("https").Host(clusterMember.Address.String())
-		c, err := internalClient.New(*url, s.ServerCert(), publicKey, isNotification)
-		if err != nil {
-			return nil, err
-		}
-
-		clients = append(clients, client.Client{Client: *c})
 	}
 
 	return clients, nil
