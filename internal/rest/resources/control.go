@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
+	"time"
 
 	"github.com/canonical/lxd/lxd/response"
 	"github.com/canonical/lxd/lxd/util"
@@ -183,10 +185,38 @@ func controlPost(state state.State, r *http.Request) response.Response {
 	return response.EmptySyncResponse
 }
 
+func filterReachableJoinAddresses(addresses []types.AddrPort) []types.AddrPort {
+	reachableAddr := []types.AddrPort{}
+	for _, addr := range addresses {
+		if isReachable(addr) {
+			reachableAddr = append(reachableAddr, addr)
+		}
+	}
+	return reachableAddr
+}
+
+// isReachable performs a quick TCP connectivity check to determine if a node is reachable.
+func isReachable(addr types.AddrPort) bool {
+	// Use a short timeout for the connectivity check
+	conn, err := net.DialTimeout("tcp", addr.String(), 2*time.Second)
+	if err != nil {
+		return false
+	}
+
+	conn.Close()
+	return true
+}
+
 func joinWithToken(state state.State, r *http.Request, req *internalTypes.Control) (*internalTypes.TokenResponse, *trust.Remote, error) {
 	token, err := internalTypes.DecodeToken(req.JoinToken)
 	if err != nil {
 		return nil, nil, err
+	}
+
+	// If none of the addresses are reachable, fail fast.
+	reachableJoinAddresses := filterReachableJoinAddresses(token.JoinAddresses)
+	if len(reachableJoinAddresses) == 0 {
+		return nil, nil, fmt.Errorf("none of the provided join token addresses are reachable")
 	}
 
 	serverCert, err := state.ServerCert().PublicKeyX509()
@@ -223,7 +253,7 @@ func joinWithToken(state state.State, r *http.Request, req *internalTypes.Contro
 	// Get a client to the target address.
 	var lastErr error
 	var joinInfo *internalTypes.TokenResponse
-	for _, addr := range token.JoinAddresses {
+	for _, addr := range reachableJoinAddresses {
 		url := api.NewURL().Scheme("https").Host(addr.String())
 
 		cert, err := shared.GetRemoteCertificate(url.String(), "")
