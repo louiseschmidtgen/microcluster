@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/canonical/lxd/lxd/response"
@@ -60,6 +61,7 @@ func trustPost(s state.State, r *http.Request) response.Response {
 
 		successCount := 0
 		attemptCount := 0
+		var counterMu sync.Mutex
 
 		// Try to add the truststore entry to all other nodes in the cluster.
 		// We don't fail the entire operation if some nodes are unreachable.
@@ -69,7 +71,9 @@ func trustPost(s state.State, r *http.Request) response.Response {
 				return nil
 			}
 
+			counterMu.Lock()
 			attemptCount++
+			counterMu.Unlock()
 
 			err := internalClient.AddTrustStoreEntry(ctx, &c.Client, req)
 			if err != nil {
@@ -78,7 +82,9 @@ func trustPost(s state.State, r *http.Request) response.Response {
 				return nil
 			}
 
+			counterMu.Lock()
 			successCount++
+			counterMu.Unlock()
 			return nil
 		})
 		if err != nil {
@@ -86,9 +92,13 @@ func trustPost(s state.State, r *http.Request) response.Response {
 		}
 
 		// Only fail if we attempted to propagate to other nodes but all failed
+		counterMu.Lock()
 		if attemptCount > 0 && successCount == 0 {
+			counterMu.Unlock()
 			return response.SmartError(fmt.Errorf("Failed adding truststore entry to any cluster node"))
 		}
+
+		counterMu.Unlock()
 	}
 
 	// At this point, the node has joined dqlite so we can add a local record for it if we haven't already from a heartbeat (or if we are the leader).
