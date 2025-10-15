@@ -707,8 +707,8 @@ func (d *Daemon) StartAPI(ctx context.Context, bootstrap bool, initConfig map[st
 	// We don't fail the entire operation if some nodes are unreachable.
 	// This is important in case we are joining a cluster with some offline members.
 	// The heartbeat mechanism will take care of notifying those members later on.
-	successCount := 0
-	attemptCount := 0
+	var successCount, attemptCount int32
+	var counterMu sync.Mutex
 
 	err = cluster.Query(d.shutdownCtx, true, func(ctx context.Context, c *client.Client) error {
 		c.SetClusterNotification()
@@ -718,7 +718,9 @@ func (d *Daemon) StartAPI(ctx context.Context, bootstrap bool, initConfig map[st
 			return nil
 		}
 
+		counterMu.Lock()
 		attemptCount++
+		counterMu.Unlock()
 
 		// Send notification about this node's dqlite version to all other cluster members.
 		err = d.sendUpgradeNotification(ctx, c)
@@ -747,7 +749,9 @@ func (d *Daemon) StartAPI(ctx context.Context, bootstrap bool, initConfig map[st
 			}
 		}
 
+		counterMu.Lock()
 		successCount++
+		counterMu.Unlock()
 		return nil
 	})
 	if err != nil {
@@ -755,9 +759,13 @@ func (d *Daemon) StartAPI(ctx context.Context, bootstrap bool, initConfig map[st
 	}
 
 	// Only fail if we attempted to notify other nodes but all failed
+	counterMu.Lock()
 	if attemptCount > 0 && successCount == 0 {
+		counterMu.Unlock()
 		return fmt.Errorf("Failed to notify any existing cluster member at %q", strings.Join(joinAddresses, ", "))
 	}
+
+	counterMu.Unlock()
 
 	if len(joinAddresses) > 0 {
 		ctx, cancel := context.WithCancel(ctx)
